@@ -136,9 +136,14 @@ class Background(Component):
 class Health(Component):
     def __init__(self, hp: int) -> None:
         self.hp = hp
+
 class Damage(Component):
     def __init__(self, dp: int) -> None:
         self.dp = dp
+
+class Flicker(Component):
+    def __init__(self, duration: float) -> None:
+        self.duration = duration
 
 # Systems -----------------------------------------------------------------------
 class MovementSystem(System):
@@ -180,7 +185,7 @@ class ObsSpawnSystem(System):
             rand_path = random.choice(ENEMIES_SPRITES)
             world.assign_component(obstacle, Sprite, Sprite(rand_path, (rand_size, rand_size)))
 
-            rand_velocity = random.randrange(240, 320)
+            rand_velocity = random.randrange(SPEED, SPEED * 2)
 
             # Random velocity to the bottom of the screen
             world.assign_component(obstacle, Velocity, Velocity(0, rand_velocity))
@@ -205,9 +210,10 @@ class CollisionSystem(System):
 
                 # Check if the ship's sprite overlaps with the obstacle's
                 if ship_sprite.mask.overlap(obs_sprite.mask, offset):
+                    world.assign_component(ship, Flicker, Flicker(0.6))
                     ship_health.hp -= 1
                     world.remove_entity(obstacle)
-                    pygame.mixer.Sound(HIT_SOUND).play()
+                    if ship_health.hp != 0 : pygame.mixer.Sound(HIT_SOUND).play()
 
 
 class RenderingSystem(System):
@@ -227,7 +233,15 @@ class RenderingSystem(System):
             sprite = world.entities_comps_data[entity][Sprite]
 
             if not Background in world.entities_comps_data[entity]:
-                self.screen.blit(sprite.image, (pos.x, pos.y))
+
+                if Flicker in world.entities_comps_data[entity]:
+                    flicker = world.entities_comps_data[entity][Flicker]
+
+                    # Display the sprite every two frames
+                    if int(flicker.duration * 10) % 2 == 0:
+                        self.screen.blit(sprite.image, (pos.x, pos.y))
+                else:
+                    self.screen.blit(sprite.image, (pos.x, pos.y))
 
         # Display health
         if len((world.query(Position, Health))) > 0:
@@ -243,6 +257,7 @@ class RenderingSystem(System):
         pygame.display.flip()
 
     def render_background(self, world: World) -> None:
+
         # Select only background entities
         for entity in world.query(Position, Sprite, Background):
             pos = world.entities_comps_data[entity][Position]
@@ -255,6 +270,13 @@ class RenderingSystem(System):
                 for j in range(-tile_size, WINDOW_WIDTH + tile_size *2, tile_size):
                     self.screen.blit(sprite.image, (i, j + pos.y))
 
+class FlickerSystem(System):
+    def __call__(self, world: World, dt: float) -> None:
+        for entity in world.query(Flicker):
+            flicker = world.entities_comps_data[entity][Flicker]
+            flicker.duration -= dt
+            if flicker.duration <= 0:
+                world.unassign_component(entity, Flicker)
 
 # Screens management functions --------------------------------------
 def show_start_menu(start_img):
@@ -264,7 +286,7 @@ def show_start_menu(start_img):
     font_title = pygame.font.Font(None, 80)
     title = font_title.render(TITLE, True, (255, 255, 255))
     font_text = pygame.font.Font(None, 40)
-    instructions_text = font_text.render("Press any key", True, (255, 255, 255))
+    instructions_text = font_text.render("Press space", True, (255, 255, 255))
     second_text = font_text.render("to start the exploration", True, (255, 255, 255))
 
     # Start menu UI
@@ -284,7 +306,7 @@ def show_start_menu(start_img):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-            if event.type == pygame.KEYDOWN:
+            if pygame.key.get_pressed() and pygame.key.get_pressed()[pygame.K_SPACE]:
                 waiting_action = False
                 run_game()
 
@@ -298,6 +320,7 @@ def show_game_over(timescore):
     instructions_text = font_text.render("Maybe the exploration", True, (255, 255, 255))
     second_text = font_text.render("was not for you...", True, (255, 255, 255))
     score = font_text.render("Score: " + timescore + "s", True, (255, 255, 255))
+    restart_text = font_text.render("Press Space", True, (255, 255, 255))
 
     screen.fill((100, 50, 50))
     
@@ -305,6 +328,7 @@ def show_game_over(timescore):
     screen.blit(instructions_text, (WINDOW_WIDTH / 2 - instructions_text.get_width() / 2, WINDOW_HEIGHT / 2 + 50))
     screen.blit(second_text, (WINDOW_WIDTH / 2 - second_text.get_width() / 2, WINDOW_HEIGHT / 2 + 100))
     screen.blit(score, (WINDOW_WIDTH / 2 - score.get_width() / 2, WINDOW_HEIGHT / 2 + 150))
+    screen.blit(restart_text, (WINDOW_WIDTH / 2 - score.get_width() / 2, WINDOW_HEIGHT / 2 + 250))
 
     pygame.display.flip()
 
@@ -318,7 +342,7 @@ def show_game_over(timescore):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-            if event.type == pygame.KEYDOWN:
+            if pygame.key.get_pressed() and pygame.key.get_pressed()[pygame.K_SPACE]:
                 run_game()
 
 def run_game():
@@ -334,6 +358,7 @@ def run_game():
     world.register_component(Health)
     world.register_component(Background)
     world.register_component(Damage)
+    world.register_component(Flicker)
 
     # Create the ship entity
     ship = world.add_entity()    
@@ -356,6 +381,7 @@ def run_game():
     collision_system = CollisionSystem()
     rendering_system = RenderingSystem(screen)
     obs_spawn_system = ObsSpawnSystem()
+    flicker_system = FlickerSystem()
 
 
     # Game loop ---------------------------------------------------------------------
@@ -387,14 +413,13 @@ def run_game():
         collision_system(world, dt)
         rendering_system(world, dt)
         obs_spawn_system(world, dt)
+        flicker_system(world, dt)
 
         # End game if health is 0
         if world.entities_comps_data[ship][Health].hp <= 0:
             running = False
             timescore = (pygame.time.get_ticks() - start_time) / 1000
             show_game_over(str(timescore))
-            
-
 
 if __name__ == "__main__":
     pygame.init()
